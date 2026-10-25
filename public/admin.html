@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Board Admin</title>
+  <style>
+    body { font-family: "Segoe UI", Arial, sans-serif; max-width: 560px; margin: 30px auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 22px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input, textarea { width: 100%; box-sizing: border-box; font-size: 14px; padding: 7px; }
+    button { margin-top: 10px; padding: 7px 14px; font-size: 14px; }
+    #status { margin-top: 10px; }
+    .error { color: #c62828; }
+    .ok { color: #2e7d32; }
+    #log { margin-top: 16px; padding-left: 18px; }
+  </style>
+</head>
+<body>
+  <h1>Send an announcement</h1>
+
+  <label for="key">Admin key</label>
+  <input id="key" type="password" autocomplete="off">
+  <button id="connectBtn">Connect</button>
+  <p id="status">Not connected</p>
+
+  <label for="msg">Message (shown on every open board)</label>
+  <textarea id="msg" rows="3" maxlength="280" disabled></textarea>
+  <button id="sendBtn" disabled>Announce</button>
+  <ul id="log"></ul>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const statusEl = document.getElementById('status');
+    const msg = document.getElementById('msg');
+    const sendBtn = document.getElementById('sendBtn');
+    let admin = null;
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || '';
+    }
+
+    function enable(on) {
+      msg.disabled = !on;
+      sendBtn.disabled = !on;
+    }
+
+    document.getElementById('connectBtn').addEventListener('click', () => {
+      if (admin) admin.disconnect();
+      admin = io('/admin', { auth: { adminKey: document.getElementById('key').value } });
+
+      admin.on('connect', () => { setStatus('Connected as admin', 'ok'); enable(true); });
+      // the server's refusal message, e.g. "Wrong admin key, connection refused"
+      admin.on('connect_error', (err) => {
+        setStatus(err.message, 'error');
+        enable(false);
+        admin.disconnect();
+      });
+      admin.on('disconnect', () => { setStatus('Disconnected', 'error'); enable(false); });
+    });
+
+    sendBtn.addEventListener('click', () => {
+      admin.emit('announce', { message: msg.value }, (res) => {
+        const li = document.createElement('li');
+        if (res.ok) {
+          li.textContent = 'Sent to ' + res.boards + ' board(s): ' + msg.value.trim();
+          msg.value = '';
+        } else {
+          li.textContent = res.error;
+          li.className = 'error';
+        }
+        document.getElementById('log').prepend(li);
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Room Board</title>
+  <style>
+    body { font-family: "Segoe UI", Arial, sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+    header { background: #1f3864; color: #fff; padding: 14px 20px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    header h1 { font-size: 20px; margin: 0; flex: 1; }
+    main { max-width: 760px; margin: 20px auto; padding: 0 16px; }
+    select, button { font-size: 14px; padding: 5px 8px; }
+    #status { font-size: 13px; padding: 4px 10px; border-radius: 12px; background: #888; }
+    #status.on { background: #2e7d32; }
+    #status.off { background: #c62828; }
+    #roomInfo { color: #555; margin-bottom: 12px; }
+    #announcements { margin-bottom: 16px; }
+    .announcement { background: #fff8e1; border-left: 4px solid #f9a825; padding: 8px 12px; margin-bottom: 6px; }
+    .announcement small { color: #777; margin-right: 8px; }
+    h2 { font-size: 16px; margin: 18px 0 6px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e0e0e0; }
+    th { background: #e8edf5; font-size: 13px; }
+    .bar { height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; width: 120px; }
+    .bar div { height: 100%; background: #43a047; }
+    tr.full td { color: #999; }
+    tr.full .bar div { background: #c62828; }
+    tr.changed { animation: flash 1.2s; }
+    @keyframes flash { from { background: #fff59d; } to { background: transparent; } }
+    #message { color: #c62828; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Study Room Board</h1>
+    <label>Room <select id="roomSelect"></select></label>
+    <span id="status">connecting...</span>
+  </header>
+
+  <main>
+    <p id="roomInfo"></p>
+    <p id="message"></p>
+    <div id="announcements"></div>
+    <div id="slots"></div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    let roomCode = (params.get('room') || 'ROOM-01').toUpperCase();
+
+    const statusEl = document.getElementById('status');
+    const roomInfo = document.getElementById('roomInfo');
+    const messageEl = document.getElementById('message');
+    const slotsEl = document.getElementById('slots');
+    const roomSelect = document.getElementById('roomSelect');
+
+    // slotId -> table row, so an update only touches its own row
+    const rows = new Map();
+    const socket = io();
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || '';
+    }
+
+    function el(tag, text, className) {
+      const node = document.createElement(tag);
+      if (text !== undefined) node.textContent = text;
+      if (className) node.className = className;
+      return node;
+    }
+
+    function hourLabel(h) {
+      return String(h).padStart(2, '0') + ':00 - ' + String(h + 2).padStart(2, '0') + ':00';
+    }
+
+    function fillRow(tr, seatsLeft, seats) {
+      tr.querySelector('.left').textContent = seatsLeft + ' of ' + seats;
+      tr.querySelector('.bar div').style.width = (100 * seatsLeft / seats) + '%';
+      tr.classList.toggle('full', seatsLeft === 0);
+    }
+
+    function render(room, slots) {
+      roomInfo.textContent = room.name + ', ' + room.building + ' (' + room.seats + ' seats)';
+      document.title = room.roomCode + ' board';
+      slotsEl.replaceChildren();
+      rows.clear();
+
+      if (!slots.length) {
+        slotsEl.append(el('p', 'No slots have been created for this room yet.'));
+        return;
+      }
+
+      // one table per day
+      const byDate = new Map();
+      for (const s of slots) {
+        if (!byDate.has(s.date)) byDate.set(s.date, []);
+        byDate.get(s.date).push(s);
+      }
+
+      for (const [date, daySlots] of byDate) {
+        slotsEl.append(el('h2', new Date(date + 'T00:00:00').toDateString()));
+        const table = el('table');
+        const head = el('tr');
+        ['Time', 'Seats left', ''].forEach((t) => head.append(el('th', t)));
+        table.append(head);
+
+        for (const s of daySlots) {
+          const tr = el('tr');
+          tr.append(el('td', hourLabel(s.startHour)));
+          tr.append(el('td', '', 'left'));
+          const barCell = el('td');
+          const bar = el('div', undefined, 'bar');
+          bar.append(el('div'));
+          barCell.append(bar);
+          tr.append(barCell);
+          tr.dataset.seats = s.seats;
+          fillRow(tr, s.seatsLeft, s.seats);
+          rows.set(s.id, tr);
+          table.append(tr);
+        }
+        slotsEl.append(table);
+      }
+    }
+
+    // Called on the first connect and again after every reconnect, so the
+    // seats are reloaded from the server instead of trusting old numbers.
+    function joinRoom() {
+      socket.emit('join:room', roomCode, (res) => {
+        if (!res || !res.ok) {
+          messageEl.textContent = (res && res.error) || 'Could not load the room';
+          slotsEl.replaceChildren();
+          return;
+        }
+        messageEl.textContent = '';
+        render(res.room, res.slots);
+      });
+    }
+
+    socket.on('connect', () => {
+      setStatus('connected', 'on');
+      joinRoom();
+    });
+
+    socket.on('disconnect', () => setStatus('disconnected, trying to reconnect...', 'off'));
+    socket.io.on('reconnect_attempt', (n) => setStatus('reconnecting (attempt ' + n + ')...', 'off'));
+
+    socket.on('slot:updated', ({ slotId, seatsLeft }) => {
+      const tr = rows.get(slotId);
+      if (!tr) return;
+      fillRow(tr, seatsLeft, Number(tr.dataset.seats));
+      tr.classList.remove('changed');
+      void tr.offsetWidth; // restart the flash animation
+      tr.classList.add('changed');
+    });
+
+    socket.on('announcement', ({ message, at }) => {
+      const box = el('div', undefined, 'announcement');
+      box.append(el('small', new Date(at).toLocaleTimeString()));
+      box.append(el('span', message)); // textContent, never innerHTML
+      document.getElementById('announcements').prepend(box);
+    });
+
+    // room picker
+    fetch('/api/v1/rooms')
+      .then((r) => r.json())
+      .then((rooms) => {
+        for (const r of rooms) {
+          const opt = el('option', r.roomCode + ' - ' + r.name);
+          opt.value = r.roomCode;
+          roomSelect.append(opt);
+        }
+        roomSelect.value = roomCode;
+      })
+      .catch(() => {});
+
+    roomSelect.addEventListener('change', () => {
+      roomCode = roomSelect.value;
+      history.replaceState(null, '', '?room=' + encodeURIComponent(roomCode));
+      joinRoom();
+    });
+  </script>
+</body>
+</html>

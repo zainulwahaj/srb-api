@@ -1,0 +1,18 @@
+# One request: the student's details and every booking with its room name,
+# date and start hour. Send to POST /graphql with { "regNo": "FA23-BAI-058" }.
+query StudentDashboard($regNo: String!) {
+  student(regNo: $regNo) {
+    regNo
+    name
+    email
+    bookings {
+      slotId
+      roomCode
+      roomName
+      building
+      date
+      startHour
+      bookedAt
+    }
+  }
+}
